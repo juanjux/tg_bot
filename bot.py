@@ -10,9 +10,10 @@ from telegram.error import NetworkError, Unauthorized
 
 from tg_token import token
 
-#http://webservices.amazon.com/onca/xml?Service=AWSECommerceService&Operation=ItemLookup&ResponseGroup=Offers&IdType=ASIN&ItemId=B00KOKTZLQ
-
 update_id = None
+
+# TODO: add requirements.txt and setup.py
+# TODO: publish to pypi
 
 def set_logging():
     logging.basicConfig(stream=sys.stderr, level=logging.INFO,
@@ -20,65 +21,87 @@ def set_logging():
 
 CONN = None
 
+
 def initialize_db():
     global CONN
 
     CONN = sqlite3.connect('bot.db')
-    c = CONN.cursor()
-    # XXX check for the error "already exists"
-    try:
-        c.execute("""
-            CREATE TABLE users
-            (
-             id INTEGER PRIMARY KEY,
-             lang_code TEXT NOT NULL,
-             name TEXT NOT NULL,
-             UNIQUE(id)
-            )
-            """)
-    except sqlite3.OperationalError as e:
-        if "already exists" not in str(e):
-            raise e
+    with CONN:
+        def create_table(name, sql):
+            try:
+                CONN.execute("CREATE TABLE %s (" % name + sql + ")")
+            except sqlite3.OperationalError as e:
+                if "already exists" not in str(e):
+                    raise e
+            else:
+                logging.info("Created table users")
 
-    try:
-        c.execute("""
-            CREATE TABLE price_watches
-            (
-             id INTEGER PRIMARY KEY AUTOINCREMENT,
-             product_code TEXT NOT NULL,
-             url TEXT NOT NULL
-            )
-            """)
-    except sqlite3.OperationalError as e:
-        if "already exists" not in str(e):
-            raise e
+        create_table('users', """
+                 id INTEGER PRIMARY KEY,
+                 lang_code TEXT NOT NULL,
+                 name TEXT NOT NULL,
+                 UNIQUE(id)
+                """)
 
-    try:
-        c.execute("""
-            CREATE TABLE users_watches
-            (
-             watch_id INTEGER NOT NULL,
-             user_id INTEGER NOT NULL,
-             FOREIGN_KEY(watch_id) REFERENCES price_watches.id,
-             FOREIGN_KEY(user_id) REFERENCES users.id,
-             UNIQUE(watch_id, user_id)
-            )
-            """)
-    except sqlite3.OperationalError as e:
-        if "already exists" not in str(e):
-            raise e
+        create_table('messages', """
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 user_id INTEGER NOT NULL,
+                 message TEXT NOT NULL,
+                 tstamp TIMESTAMP NOT NULL,
+                 FOREIGN KEY(user_id) REFERENCES users(id)
+                """)
 
-    CONN.commit()
-    # XXX close cursor?
+        create_table('watch_types', """
+                id INTEGER PRIMARY KEY,
+                description TEXT
+                """)
+
+        CONN.execute("""
+            INSERT INTO watch_types VALUES
+            (0, "any change"),
+            (1, "below exact price"),
+            (2, "below percentage from starting price")
+            """)
+
+        create_table('products_watched', """
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 product_code TEXT NOT NULL,
+                 url TEXT NOT NULL
+                """)
+
+        create_table('user_watches', """
+                 product_id INTEGER NOT NULL,
+                 user_id INTEGER NOT NULL,
+                 message_id INTEGER,
+                 watch_type_id INTEGER NOT NULL DEFAULT 0,
+                 change_value REAL,
+                 initial_price REAL NOT NULL,
+                 FOREIGN KEY(product_id) REFERENCES products_watched(id),
+                 FOREIGN KEY(user_id) REFERENCES users(id),
+                 FOREIGN KEY(message_id) REFERENCES message(id),
+                 FOREIGN KEY(watch_type_id) REFERENCES watch_type(id)
+                 UNIQUE(product_id, user_id)
+                """)
 
 
 def db_add_user(user):
-    c = CONN.cursor()
-    c.execute("""
-        INSERT OR IGNORE INTO users(id, lang_code, name)
-        VALUES(?, ?, ?)
-        """, (user.id, user.language_code, user.name))
-    CONN.commit()
+    with CONN:
+        cursor = CONN.cursor()
+        cursor.execute("""
+            INSERT OR IGNORE INTO users(id, lang_code, name)
+            VALUES(?, ?, ?)
+            """, (user.id, user.language_code, user.name))
+        return cursor.lastrowid
+
+
+def db_add_msg(user_id, msg, tstamp):
+    with CONN:
+        cursor = CONN.cursor()
+        cursor.execute("""
+            INSERT INTO messages(user_id, message, tstamp)
+            VALUES(?, ?, ?)
+            """, (user_id, msg, tstamp))
+        return cursor.lastrowid
 
 
 def main():
@@ -98,8 +121,8 @@ def main():
         update_id = None
 
 
+    logging.info("Starting processing loop")
     while True:
-        logging.info("Starting processing loop")
         try:
             echo(bot)
         except NetworkError:
@@ -123,6 +146,7 @@ def echo(bot):
 
         if update.message:  # your bot can receive updates without messages
             # Reply to the message
+            db_add_msg(user.id, update.message.text, update.message.date)
             logging.info("Received: " + update.message.text)
             to_send = update.message.text
             update.message.reply_text(to_send)
