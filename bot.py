@@ -13,6 +13,8 @@ from tg_token import token
 update_id = None
 
 # TODO: add update command
+# TODO: separate the DB functions into another module, factorize the
+# remaining queries in non DB functions there.
 # TODO: actually fetch the prices (in a separate process) and send
 # the messages when the conditions match
 # TODO: add requirements.txt and setup.py and all the boilerplate
@@ -140,7 +142,6 @@ def db_add_product_watched(code, country, url):
             WHERE product_code=? AND country_code=?
             """, (code, country))
         res = cursor.fetchone()
-        print("XXX res: ", res)
         if res is not None:
             # Already added
             return res[0]
@@ -151,7 +152,6 @@ def db_add_product_watched(code, country, url):
             products_watched(product_code, country_code, url)
             VALUES (?, ?, ?)
             """, (code, country, url))
-        print("XXX lastrowid: ", cursor.lastrowid)
         return cursor.lastrowid
 
 
@@ -167,7 +167,6 @@ def db_add_user_watch(pwatch_id, user, change, is_percent):
 
     with CONN:
         cursor = CONN.cursor()
-        print("XXX pwatch_id: ", pwatch_id)
         cursor.execute("""
             SELECT id FROM user_watches
             WHERE product_id=? AND user_id=?
@@ -311,9 +310,7 @@ def add_watch(user, code, country, message):
                 "or URL [percent%]")
         return
 
-    # XXX continue here
     pwatch_id = db_add_product_watched(code, country, url)
-    # XXX continue here
     db_add_user_watch(pwatch_id, user, change, is_percent)
 
     message.reply_text("Watch added for product with code %s" % code)
@@ -339,7 +336,6 @@ def remove_watch(user, message):
             WHERE user_id=? AND id=?
             """, (user.id, id_))
         res = cursor.fetchone()
-        print("XXX res: ", res)
         if res is None:
             message.reply_text("No watch found with code %d for this user" % id_)
         else:
